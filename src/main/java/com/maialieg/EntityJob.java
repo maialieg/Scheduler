@@ -6,22 +6,29 @@ import org.slf4j.LoggerFactory;
 public class EntityJob implements Runnable {
 
     private static final Logger log = LoggerFactory.getLogger(EntityJob.class);
+    private static final int DEFAULT_MAX_RETRIES = 3;
 
-    private  String name;
-    private JobPriority priority;
+    private final String name;
+    private final JobPriority priority;
+    private final JobActionInterface jobAction;
+    private final int maxRetries;
     private JobState jobState;
-    private JobActionInterface jobAction;
 
     public EntityJob(String jobName, JobPriority priority, JobActionInterface jobAction) {
-        this.name = jobName;
-        this.priority = priority;
-        this.jobState = JobState.QUEUED;
-        this.jobAction = jobAction;
-        log.info("job: " + name + " With Priority: "+ priority + " is currently "+ jobState.toString());
+        this(jobName, priority, jobAction, DEFAULT_MAX_RETRIES);
     }
 
-    public int getJobPriority() {
-        return priority.ordinal();
+    public EntityJob(String jobName, JobPriority priority, JobActionInterface jobAction, int maxRetries) {
+        this.name = jobName;
+        this.priority = priority;
+        this.jobAction = jobAction;
+        this.maxRetries = maxRetries;
+        this.jobState = JobState.QUEUED;
+        log.info("Job '{}' with priority {} is {}", name, priority, jobState);
+    }
+
+    public JobPriority getJobPriority() {
+        return priority;
     }
 
     public JobState getJobState() {
@@ -30,20 +37,32 @@ public class EntityJob implements Runnable {
 
     @Override
     public void run() {
-        try
-        {
-            jobState = JobState.RUNNING;
-            jobAction.execute();
-            log.info("job: " + name + " With Priority: "+ priority  + " is currently "+ "\033[1m"+jobState.toString()+"\033[0m");
-        }
-        catch (InterruptedException e)
-        {
-            jobState = JobState.FAILED;
-            log.info("job: " + name +" With Priority: "+ priority +" is currently "+ jobState.toString());
-            e.printStackTrace();
-        }
-        jobState = JobState.SUCCESS;
-        log.info("job: " + name + " With Priority: "+ priority +" is currently "+jobState.toString());
-    }
+        int attempts = 0;
 
+        while (attempts <= maxRetries) {
+            try {
+                if (attempts == 0) {
+                    jobState = JobState.RUNNING;
+                    log.info("Job '{}' with priority {} is {}", name, priority, jobState);
+                } else {
+                    jobState = JobState.RETRYING;
+                    log.info("Job '{}' retry attempt {}/{}", name, attempts, maxRetries);
+                }
+
+                jobAction.execute();
+
+                jobState = JobState.SUCCESS;
+                log.info("Job '{}' with priority {} is {}", name, priority, jobState);
+                return;
+
+            } catch (InterruptedException e) {
+                attempts++;
+                if (attempts > maxRetries) {
+                    jobState = JobState.FAILED;
+                    log.error("Job '{}' failed after {} retries", name, maxRetries);
+                    Thread.currentThread().interrupt();
+                }
+            }
+        }
+    }
 }
